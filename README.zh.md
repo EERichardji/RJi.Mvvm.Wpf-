@@ -1,5 +1,7 @@
 ## RJi.Mvvm.Wpf
 
+[English](READ.md)
+
 文档已重新编写，适配最新版本，适用于 1.2.7。
 
 ### 介绍
