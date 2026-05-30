@@ -1,6 +1,7 @@
 ## RJi.Mvvm.Wpf
 
-[简体中文](READ.zh.md)
+[简体中文](READMD.zh.md)
+[2.0.0+](Dos/README.zh.md)
 
 The documentation has been rewritten to adapt to the latest version, applicable for 1.2.7.
 
