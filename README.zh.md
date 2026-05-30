@@ -1,12 +1,8 @@
 ## RJi.Mvvm.Wpf
 
-[English](README.md)
+- 文档已重新编写，适配最新版本，适用于 1.2.7。[English](README.md)
+- 文档已重新编写，适配最新版本，适用于 2.0.0。[English](Docs/README.en.md)
 
-文档已重新编写，适配最新版本，适用于 1.2.7。
-
-[English](Docs/README.en.md)
-
-文档已重新编写，适配最新版本，适用于 2.0.0。
 ### 介绍
 
 RJi.Mvvm.Wpf 是一款适用于 `.NET 6.0` 的轻量级 WPF MVVM 框架，基于 `CommunityToolkit.Mvvm` 构建。该框架提供类似 `Prism.Wpf` 的功能，同时集成 `Microsoft.Extensions.Hosting` 实现依赖注入管理，支持 `ContentControl` 和 `UserControl` 的导航，并实现导航参数传递、导航历史记录、导航确认、会话窗口以及视图缓存等功能，为小型 WPF 项目提供便捷的开发支持。
