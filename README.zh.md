@@ -1,7 +1,7 @@
 ## RJi.Mvvm.Wpf
 
 - 文档已重新编写，适配最新版本，适用于 1.2.7。[English](README.md)
-- 文档已重新编写，适配最新版本，适用于 2.0.0。[English](Docs/README.en.md)
+- 文档已重新编写，适配最新版本，适用于 2.2.0。[English](Docs/README.en.md)
 
 ### 介绍
 
