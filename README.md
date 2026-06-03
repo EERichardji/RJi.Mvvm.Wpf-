@@ -1,7 +1,7 @@
 ## RJi.Mvvm.Wpf
 
 - The documentation has been rewritten to adapt to the latest version, applicable for 1.2.7.[简体中文](README.zh.md)
-- The documentation has been rewritten to adapt to the latest version, applicable for 2.0.0.[简体中文](Docs/README.zh.md)
+- The documentation has been rewritten to adapt to the latest version, applicable for 2.2.0.[简体中文](Docs/README.zh.md)
 ### Introduction
 
 RJi.Mvvm.Wpf is a lightweight WPF MVVM framework for `.NET 6.0`, built on `CommunityToolkit.Mvvm`. This framework provides functionality similar to `Prism.Wpf` while integrating `Microsoft.Extensions.Hosting` for dependency injection management. It supports navigation between `ContentControl` and `UserControl`, and implements features such as navigation parameter passing, navigation history, navigation confirmation, dialog windows, and view caching, providing convenient development support for small WPF projects.
