@@ -2,13 +2,43 @@
 
 A lightweight WPF MVVM framework for `.NET 8.0` and `.NET Framework 4.8`, built on `CommunityToolkit.Mvvm` and `Microsoft.Extensions.DependencyInjection`.
 
+> **⚠️ .NET Framework 4.8 Requires SDK-Style Project**
+>
+> **All source generators** described in this document — including CT.Mvvm's `[ObservableProperty]`, `[RelayCommand]` and the framework's own `[NavigationTarget]`, `[DialogTarget]`, DI attributes — require **C# 8.0+ / LangVersion latest** and NuGet's automatic analyzer loading. The legacy `packages.config` + old csproj format does not support either. You must manually convert to SDK-style.
+>
+> **Steps:**
+>
+> 1. Locate the `.csproj` file, right-click → **Open with** → **edit the .csproj**, **delete all content**
+> 2. **Paste the following** to replace the original content:
+>
+> ```xml
+> <Project Sdk="Microsoft.NET.Sdk">
+>   <PropertyGroup>
+>     <OutputType>WinExe</OutputType>
+>     <TargetFramework>net48</TargetFramework>
+>     <LangVersion>latest</LangVersion>
+>     <Nullable>enable</Nullable>
+>     <UseWPF>true</UseWPF>
+>     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+>   </PropertyGroup>
+>   <ItemGroup>
+>     <PackageReference Include="RJi.Mvvm.Wpf" Version="..." />
+>   </ItemGroup>
+> </Project>
+> ```
+>
+> 3. **Delete `packages.config`** if present
+> 4. Rebuild the solution
+>
+> > .NET 8.0 projects are unaffected — SDK-style is the default format.
+
 ## Core Features
 
 - **Zero Reflection**: All View-ViewModel bindings are registered explicitly via generic keyed methods at startup.
 - **Navigation System**: View zones, lifecycle management, history recording, and view caching.
 - **Dialog Windows**: Built-in `DialogWindow` with lifecycle hooks and custom window support.
 - **MVVM Integration**: Built on `CommunityToolkit.Mvvm` with built-in Messenger support.
-- **Source Generator**: Roslyn-based source generator for automatic registration via `[NavigationTarget]`, `[DialogTarget]`, and DI attributes.
+- **Source Generators**: CT.Mvvm source generators (`[ObservableProperty]`, `[RelayCommand]`, etc.) plus framework-level generators (`[NavigationTarget]`, `[DialogTarget]`, DI attributes).
 
 ## Quick Start
 
@@ -83,18 +113,21 @@ public class App : RJiApplication
 
 The framework is built on [`Microsoft.Extensions.DependencyInjection`](https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection/usage) for its dependency injection container. The following services are automatically registered during `RJiApplication` initialization:
 
-| Service Interface    | Description                                         |
-| -------------------- | --------------------------------------------------- |
-| `INavigationService` | Navigation service (Singleton)                      |
-| `IDialogService`     | Dialog service (Singleton)                          |
-| `IMessenger`         | CommunityToolkit.Mvvm Messenger service (Singleton) |
-| `IServiceProvider`   | Dependency injection container                      |
+| Service Interface      | Description                                         |
+| ---------------------- | --------------------------------------------------- |
+| `INavigationService`   | Navigation service (Singleton)                      |
+| `IDialogService`       | Dialog service (Singleton)                          |
+| `IDispatcherMessenger` | CommunityToolkit.Mvvm Messenger with UI thread dispatch + DispatchMode (Singleton) |
+| `IUIDispatcher`        | UI thread dispatcher wrapper (Singleton)            |
+| `IServiceProvider`     | Dependency injection container                      |
 
-> **Note**: `IMessenger` is pre-registered and can be used directly via constructor injection in ViewModels.
+> **Note**: `IDispatcherMessenger` is pre-registered (inherits `IMessenger`) and can be used via constructor injection. See [Messenger with UI Thread Dispatch](#messenger-with-ui-thread-dispatch) for details on automatic UI thread dispatching.
 
 ### CommunityToolkit.Mvvm Usage
 
 The framework is built on [`CommunityToolkit.Mvvm`](https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/). Key patterns:
+
+> **Prerequisite**: For net48 targets, configure the SDK-style project as shown at the top of this document; otherwise the CT.Mvvm source generators below won't work.
 
 ```csharp
 public partial class HomeViewModel : ObservableObject
@@ -107,34 +140,92 @@ public partial class HomeViewModel : ObservableObject
 
     // [RelayCommand] → auto-generates ICommand property (MethodName + Command)
     [RelayCommand]
-    private void Navigate() { }
+    private void Navigate() { }                         // no parameter
+
+    [RelayCommand]
+    private void Open(string path) { }                  // with parameter
 
     [RelayCommand(CanExecute = nameof(CanSave))]
-    private void Save() { }
+    private void Save() { }                             // with CanExecute
 
     private bool CanSave => true;
 }
+
+// Without source generator — no `partial` keyword, no partial methods:
+public class ManualViewModel : ObservableObject
+{
+    private string _title = "";
+    public string Title
+    {
+        get => _title;
+        set => SetProperty(ref _title, value);
+    }
+
+    public ICommand NavigateCommand { get; }
+    public ICommand OpenCommand { get; }
+    public ICommand SaveCommand { get; }
+
+    public ManualViewModel()
+    {
+        NavigateCommand = new RelayCommand(OnNavigate);
+        OpenCommand = new RelayCommand<string>(OnOpen);
+        SaveCommand = new RelayCommand(OnSave, CanSave);
+    }
+
+    private void OnNavigate() { }
+    private void OnOpen(string path) { }
+    private void OnSave() { }
+    private bool CanSave() => true;
+}
 ```
 
-**Messenger** (injected via container-registered `IMessenger`):
+**Messenger** (with automatic UI thread dispatch):
+
+> **⚠️ Always use the injected `IDispatcherMessenger`** (not `WeakReferenceMessenger.Default`), otherwise handlers will NOT be dispatched to the UI thread. `IDispatcherMessenger` also provides a matching `Send<TMessage>()` extension method to ensure consistent token behavior and correct message delivery.
+
+The `IDispatcherMessenger` wraps `WeakReferenceMessenger.Default`, and automatically dispatches the handler to the UI thread when sending from a background thread — no manual `Dispatcher.Invoke` needed.
 
 ```csharp
-public class LoginViewModel
+public class DataViewModel
 {
-    private readonly IMessenger _messenger;
-    public LoginViewModel(IMessenger messenger) => _messenger = messenger;
+    private readonly IDispatcherMessenger _messenger;
+    public DataViewModel(IDispatcherMessenger messenger) => _messenger = messenger;
 
-    public void Login() => _messenger.Send(new UserLoggedInMessage("admin"));
+    // Background thread sends → handler executes on UI thread
+    public void OnDataReceived(float value) =>
+        _messenger.Send(new DataUpdatedMessage(value));
 }
 
-public class MainViewModel : ObservableRecipient
+// Receiver — safe to update bindings
+public class DisplayViewModel
 {
-    public MainViewModel(IMessenger messenger) : base(messenger) =>
-        Messenger.Register<UserLoggedInMessage>(this, (r, m) => { /* handle */ });
+    public DisplayViewModel(IDispatcherMessenger messenger) =>
+        messenger.Register<DataUpdatedMessage>(this, (r, m) =>
+        {
+            DataValue = m.Value; // no Dispatcher.Invoke needed
+        });
 }
 
-public class UserLoggedInMessage { public string Username { get; } }
+public class DataUpdatedMessage(float value)
+{
+    public float Value { get; } = value;
+}
 ```
+
+**Specify dispatch mode**: control whether the handler is dispatched to the UI thread via `DispatchMode`:
+
+```csharp
+// Default: dispatch to UI thread (same as above)
+messenger.Register<Msg>(this, handler);
+messenger.Register<Msg>(this, handler, DispatchMode.UIThread);
+
+// Publisher thread: handler runs on the same thread as Send — no dispatch, no try-catch
+messenger.Register<Msg>(this, handler, DispatchMode.PublisherThread);
+```
+
+> `DispatchMode.PublisherThread` is useful for logging, cache updates, or other non-UI work — the handler runs inline with no dispatch overhead.
+
+> **Manual dispatch**: `IUIDispatcher` is also registered in the container, wrapping `Application.Current.Dispatcher` for when you need it.
 
 > **Full docs**: [CommunityToolkit.Mvvm](https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/)
 
@@ -221,24 +312,19 @@ public class HomeViewModel : ObservableObject, INavigationLifecycle
 }
 ```
 
-### Navigation Confirmation
+> **Tip**: If your ViewModel implements `IDisposable`, the framework will automatically call `Dispose()` when the view is evicted from the navigation cache (e.g., `KeepAlive=false` on navigation away, LRU cache full, or ViewZone unloaded). This is useful for releasing messenger subscriptions, timers, and other managed resources:
 
-```csharp
-public class EditorViewModel : ObservableObject, IConfirmNavigationRequest
-{
-    private bool _hasUnsavedChanges;
+> ```csharp
+> public class MyViewModel : ObservableObject, INavigationLifecycle, IDisposable
+> {
+>     public void Dispose()
+>     {
+>         WeakReferenceMessenger.Default.UnregisterAll(this);
+>     }
+> }
+> ```
 
-    public bool ConfirmNavigationRequest(NavigationContext context) {
-        if (_hasUnsavedChanges) {
-            // Show confirmation dialog
-            return false; // Cancel navigation
-        }
-        return true; // Allow navigation
-    }
-
-    public bool CanClose(NavigationContext context) => !_hasUnsavedChanges;
-}
-```
+> **Note**: The callback pattern supports async confirmation scenarios (e.g., dialog-based confirmation). If the View does not implement `IConfirmNavigationRequest`, navigation proceeds automatically.
 
 ### Navigation History
 
@@ -576,6 +662,8 @@ public static class IServiceCollectionExtension
 
 The framework includes a Roslyn source generator that eliminates manual registration boilerplate.
 
+> **Prerequisite**: For net48 targets, configure the SDK-style project as shown at the top of this document; otherwise the framework source generators below won't work.
+
 ### Usage
 
 Replace manual registration with a single call in `ConfigureServices`:
@@ -586,16 +674,6 @@ protected override void ConfigureServices(IServiceCollection services)
     services.AddGeneratedRegistrations();  // requires using RJi.Mvvm.Wpf.IoC;
 }
 ```
-
-Add the generator project reference to your `.csproj`:
-
-```xml
-<ItemGroup>
-    <ProjectReference Include="..\RJi.Mvvm.Wpf.Generators\RJi.Mvvm.Wpf.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-</ItemGroup>
-```
-
-> **Note**: When using the framework NuGet package, the generator DLL is automatically included as an analyzer — no additional project reference is needed.
 
 ### Attributes
 
@@ -772,6 +850,19 @@ public partial class MyView1 : UserControl
 | `DialogResult`                | Dialog result object         |
 | `DialogParameters`            | Dialog parameters collection |
 | `ButtonResult`                | Button result enum           |
+
+### Threading
+
+| API                          | Description                                    |
+| ---------------------------- | ---------------------------------------------- |
+| `IUIDispatcher`              | UI thread dispatcher interface                 |
+| `IUIDispatcher.Invoke()`     | Synchronously dispatch action to UI thread     |
+| `IUIDispatcher.InvokeAsync()`| Asynchronously dispatch action to UI thread    |
+| `IUIDispatcher.CheckAccess()`| Check if current thread is the UI thread       |
+| `IDispatcherMessenger`       | IMessenger interface with DispatchMode support                                  |
+| `DispatchMode`               | Dispatch mode enum (`UIThread` / `PublisherThread`)                             |
+| `IDispatcherMessengerExtensions.Register()` | Extension method to register with a specific DispatchMode |
+| `IDispatcherMessengerExtensions.Send()`     | Extension method to send with consistent default token   |
 
 ### Source Generator
 
