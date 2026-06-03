@@ -2,13 +2,43 @@
 
 基于 `CommunityToolkit.Mvvm` 和 `Microsoft.Extensions.DependencyInjection` 的轻量级 WPF MVVM 框架，支持 `.NET 8.0` 和 `.NET Framework 4.8`。
 
+> **⚠️ 目标 .NET Framework 4.8 必须使用 SDK 风格项目**
+>
+> 本文档介绍的**所有源码生成器**（包括 CT.Mvvm 的 `[ObservableProperty]`、`[RelayCommand]` 和框架自身的 `[NavigationTarget]`、`[DialogTarget]`、DI 特性等）均依赖 **C# 8.0+** 及 NuGet 分析器自动加载机制。传统 `packages.config` + 旧式 csproj 无法满足此要求，必须手动转为 SDK 风格。
+>
+> **操作步骤：**
+>
+> 1. 找到 `.csproj` 文件，右键 → **打开并编辑 .csproj**，**删除全部内容**
+> 2. **粘贴以下内容**，替换原内容：
+>
+> ```xml
+> <Project Sdk="Microsoft.NET.Sdk">
+>   <PropertyGroup>
+>     <OutputType>WinExe</OutputType>
+>     <TargetFramework>net48</TargetFramework>
+>     <LangVersion>latest</LangVersion>
+>     <Nullable>enable</Nullable>
+>     <UseWPF>true</UseWPF>
+>     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+>   </PropertyGroup>
+>   <ItemGroup>
+>     <PackageReference Include="RJi.Mvvm.Wpf" Version="..." />
+>   </ItemGroup>
+> </Project>
+> ```
+>
+> 3. **删除 `packages.config`** 文件（如存在）
+> 4. 重新生成解决方案
+>
+> > .NET 8.0 项目无此限制，SDK 风格已是默认格式。
+
 ## 核心特性
 
 - **MVVM 集成**: 基于 `CommunityToolkit.Mvvm`，内置信使服务支持。
 - **零反射**: 所有 View-ViewModel 绑定通过泛型键值方法在启动时显式注册。
 - **导航系统**: 视图区域、生命周期管理、历史记录和视图缓存。
 - **对话框窗口**: 内置 `DialogWindow`，支持生命周期钩子和自定义窗口。
-- **源码生成器**: 基于 Roslyn 的源码生成器，通过 `[NavigationTarget]`、`[DialogTarget]` 和 DI 特性实现自动注册。
+- **源码生成器**: 集成 CT.Mvvm 源码生成器（`[ObservableProperty]`、`[RelayCommand]` 等），并额外提供 `[NavigationTarget]`、`[DialogTarget]`、DI 特性等框架级生成器。
 
 ## 快速开始
 
@@ -87,14 +117,17 @@ public class App : RJiApplication
 | -------------------- | ------------------------------------------- |
 | `INavigationService` | 导航服务（Singleton）                       |
 | `IDialogService`     | 对话框服务（Singleton）                     |
-| `IMessenger`         | CommunityToolkit.Mvvm 信使服务（Singleton） |
+| `IDispatcherMessenger` | CommunityToolkit.Mvvm 信使（带 UI 线程调度 + DispatchMode 支持）（Singleton） |
+| `IUIDispatcher`      | UI 线程调度器（Singleton）                  |
 | `IServiceProvider`   | 依赖注入容器                                |
 
-> **注意**：`IMessenger` 已预注册，可直接在 ViewModel 中通过构造函数注入使用。
+> **注意**：`IDispatcherMessenger` 已预注册（继承 `IMessenger`），可直接在 ViewModel 中通过构造函数注入使用。详见[信使与 UI 线程调度](#信使与-ui-线程调度)。
 
 ### CommunityToolkit.Mvvm 用法
 
 框架基于 [`CommunityToolkit.Mvvm`](https://learn.microsoft.com/zh-cn/dotnet/communitytoolkit/mvvm/) 构建，核心用法：
+
+> **前提**：目标 net48 需先按文档开头的说明配置 SDK 风格项目，否则以下 CT.Mvvm 源码生成器无效。
 
 ```csharp
 public partial class HomeViewModel : ObservableObject
@@ -107,34 +140,92 @@ public partial class HomeViewModel : ObservableObject
 
     // [RelayCommand] → 自动生成 ICommand 属性（方法名 + Command）
     [RelayCommand]
-    private void Navigate() { }
+    private void Navigate() { }                         // 无参
+
+    [RelayCommand]
+    private void Open(string path) { }                  // 带参
 
     [RelayCommand(CanExecute = nameof(CanSave))]
-    private void Save() { }
+    private void Save() { }                             // 带 CanExecute
 
     private bool CanSave => true;
 }
+
+// 不使用源码生成器时，无需 partial 关键字，也无分部方法：
+public class ManualViewModel : ObservableObject
+{
+    private string _title = "";
+    public string Title
+    {
+        get => _title;
+        set => SetProperty(ref _title, value);
+    }
+
+    public ICommand NavigateCommand { get; }
+    public ICommand OpenCommand { get; }
+    public ICommand SaveCommand { get; }
+
+    public ManualViewModel()
+    {
+        NavigateCommand = new RelayCommand(OnNavigate);
+        OpenCommand = new RelayCommand<string>(OnOpen);
+        SaveCommand = new RelayCommand(OnSave, CanSave);
+    }
+
+    private void OnNavigate() { }
+    private void OnOpen(string path) { }
+    private void OnSave() { }
+    private bool CanSave() => true;
+}
 ```
 
-**信使**（通过容器注册的 `IMessenger` 注入）：
+**信使**（支持自动 UI 线程调度）：
+
+> **⚠️ 必须使用注入的 `IDispatcherMessenger`**（而非直接使用 `WeakReferenceMessenger.Default`），否则 handler 不会自动切到 UI 线程。`IDispatcherMessenger` 提供了配套的 `Send<TMessage>()` 扩展方法，确保 token 一致、消息正确送达。
+
+框架的 `IDispatcherMessenger` 包装了 `WeakReferenceMessenger.Default`，从后台线程发消息时，**handler 自动在 UI 线程执行**，无需手动 `Dispatcher.Invoke`。
 
 ```csharp
-public class LoginViewModel
+public class DataViewModel
 {
-    private readonly IMessenger _messenger;
-    public LoginViewModel(IMessenger messenger) => _messenger = messenger;
+    private readonly IDispatcherMessenger _messenger;
+    public DataViewModel(IDispatcherMessenger messenger) => _messenger = messenger;
 
-    public void Login() => _messenger.Send(new UserLoggedInMessage("admin"));
+    // 后台线程发 → handler 自动在 UI 线程执行
+    public void OnDataReceived(float value) =>
+        _messenger.Send(new DataUpdatedMessage(value));
 }
 
-public class MainViewModel : ObservableRecipient
+// 收方 — 更新 binding 安全
+public class DisplayViewModel
 {
-    public MainViewModel(IMessenger messenger) : base(messenger) =>
-        Messenger.Register<UserLoggedInMessage>(this, (r, m) => { /* 处理 */ });
+    public DisplayViewModel(IDispatcherMessenger messenger) =>
+        messenger.Register<DataUpdatedMessage>(this, (r, m) =>
+        {
+            DataValue = m.Value; // 不用 Dispatcher.Invoke
+        });
 }
 
-public class UserLoggedInMessage { public string Username { get; } }
+public class DataUpdatedMessage(float value)
+{
+    public float Value { get; } = value;
+}
 ```
+
+**指定线程调度模式**：注册时可通过 `DispatchMode` 控制 handler 是否自动切到 UI 线程：
+
+```csharp
+// 默认模式：自动切 UI 线程（和上述示例相同）
+messenger.Register<Msg>(this, handler);
+messenger.Register<Msg>(this, handler, DispatchMode.UIThread);
+
+// 发布者线程执行：handler 在 Send 所在的线程直跑，不做任何调度
+messenger.Register<Msg>(this, handler, DispatchMode.PublisherThread);
+```
+
+> `DispatchMode.PublisherThread` 适用于日志记录、缓存更新等不需要碰 UI 的场景——handler 直接执行，没有调度开销。
+
+> **手动调度**：`IUIDispatcher` 也已注册到容器，封装了 `Application.Current.Dispatcher`，需要时可注入使用。
 
 > **完整文档**：[CommunityToolkit.Mvvm](https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/)
 
@@ -221,24 +312,19 @@ public class HomeViewModel : ObservableObject, INavigationLifecycle
 }
 ```
 
-### 导航确认
+> **提示**：如果 ViewModel 实现了 `IDisposable`，当视图被导航缓存驱逐（如 `KeepAlive=false` 切走、LRU 缓存满、ViewZone 卸载）时，框架会自动调用 `Dispose()` 方法，方便释放信使订阅、定时器等托管资源：
 
-```csharp
-public class EditorViewModel : ObservableObject, IConfirmNavigationRequest
-{
-    private bool _hasUnsavedChanges;
+> ```csharp
+> public class MyViewModel : ObservableObject, INavigationLifecycle, IDisposable
+> {
+>     public void Dispose()
+>     {
+>         WeakReferenceMessenger.Default.UnregisterAll(this);
+>     }
+> }
+> ```
 
-    public bool ConfirmNavigationRequest(NavigationContext context) {
-        if (_hasUnsavedChanges) {
-            // 显示确认对话框
-            return false; // 取消导航
-        }
-        return true; // 允许导航
-    }
-
-    public bool CanClose(NavigationContext context) => !_hasUnsavedChanges;
-}
-```
+> **注意**：回调模式支持异步确认场景（如对话框确认）。如果视图未实现 `IConfirmNavigationRequest`，则默认允许导航。
 
 ### 导航历史
 
@@ -576,6 +662,8 @@ public static class IServiceCollectionExtension
 
 框架包含一个 Roslyn 源码生成器，消除手动注册的样板代码。
 
+> **前提**：目标 net48 需先按文档开头的说明配置 SDK 风格项目，否则以下框架源码生成器无效。
+
 ### 使用方式
 
 在 `ConfigureServices` 中用单行调用替代手动注册：
@@ -586,16 +674,6 @@ protected override void ConfigureServices(IServiceCollection services)
     services.AddGeneratedRegistrations();  // 需要 using RJi.Mvvm.Wpf.IoC;
 }
 ```
-
-在 `.csproj` 中添加生成器项目引用：
-
-```xml
-<ItemGroup>
-    <ProjectReference Include="..\RJi.Mvvm.Wpf.Generators\RJi.Mvvm.Wpf.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-</ItemGroup>
-```
-
-> **注意**：通过 NuGet 包使用框架时，生成器 DLL 会自动作为分析器包含，无需额外项目引用。
 
 ### 特性
 
@@ -771,6 +849,19 @@ public partial class MyView1 : UserControl
 | `DialogResult`                | 对话框结果对象     |
 | `DialogParameters`            | 对话框参数集合     |
 | `ButtonResult`                | 按钮结果枚举       |
+
+### 线程调度
+
+| API                          | 说明                            |
+| ---------------------------- | ------------------------------- |
+| `IUIDispatcher`              | UI 线程调度器接口               |
+| `IUIDispatcher.Invoke()`     | 同步调度操作到 UI 线程          |
+| `IUIDispatcher.InvokeAsync()`| 异步调度操作到 UI 线程          |
+| `IUIDispatcher.CheckAccess()`| 检查当前线程是否为 UI 线程      |
+| `IDispatcherMessenger`       | 带 DispatchMode 支持的 IMessenger 接口                  |
+| `DispatchMode`               | 消息分发模式枚举（`UIThread` / `PublisherThread`）       |
+| `IDispatcherMessengerExtensions.Register()` | 指定 DispatchMode 的注册扩展方法 |
+| `IDispatcherMessengerExtensions.Send()`     | 统一默认 token 的发送扩展方法     |
 
 ### 源码生成器
 
